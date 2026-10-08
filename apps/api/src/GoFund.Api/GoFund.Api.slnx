@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="GoFund.Api/GoFund.Api.csproj" />
+  <Project Path="GoFund.Application/GoFund.Application.csproj" />
+  <Project Path="GoFund.Domain/GoFund.Domain.csproj" />
+  <Project Path="GoFund.Infrastructure/GoFund.Infrastructure.csproj" />
+</Solution>
