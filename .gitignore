@@ -36,3 +36,18 @@ yarn-error.log*
 # Misc
 .DS_Store
 *.pem
+
+# Visual Studio
+.vs/
+**/.vs/
+
+# .NET build output
+**/bin/
+**/obj/
+
+# Local development configuration - may contain secrets
+**/appsettings.Development.json
+
+# Publish profiles may contain credentials
+**/Properties/PublishProfiles/
+

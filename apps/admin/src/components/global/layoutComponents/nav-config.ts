@@ -3,12 +3,12 @@ import {
   LayoutDashboard,
   GitBranch,
   Users,
-  Wallet,
-  Repeat,
-  ShieldCheck,
+  //Wallet,
+  //Repeat,
+  //ShieldCheck,
   UserCog,
   FileText,
-  Settings,
+  //Settings,
 } from "lucide-react";
 
 export interface NavItem {

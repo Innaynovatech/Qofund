@@ -310,5 +310,116 @@ namespace GoFund.Infrastructure.Email
                 }
             }
         }
+
+
+        public async Task SendLoginOtpAsync(
+            string email,
+            string firstName,
+            string otp,
+            CancellationToken cancellationToken = default)
+        {
+            var message = new MimeMessage();
+
+            message.From.Add(
+                new MailboxAddress(
+                    _settings.FromName,
+                    _settings.FromAddress));
+
+            message.To.Add(MailboxAddress.Parse(email));
+            message.Subject = "Your QoFund login verification code";
+
+            var body = $"""
+        <html>
+        <body style="font-family:Arial,sans-serif;color:#333;">
+            <h2>QoFund Login Verification</h2>
+
+            <p>Hello {System.Net.WebUtility.HtmlEncode(firstName)},</p>
+
+            <p>
+                Use the verification code below to complete
+                your QoFund login.
+            </p>
+
+            <div style="
+                font-size:32px;
+                font-weight:bold;
+                letter-spacing:8px;
+                padding:16px;
+                background:#f2f4f7;
+                display:inline-block;
+                border-radius:8px;">
+                {System.Net.WebUtility.HtmlEncode(otp)}
+            </div>
+
+            <p>This code expires in <strong>5 minutes</strong>.</p>
+
+            <p>
+                Do not share this code with anyone.
+                If you did not attempt to log in, you can ignore
+                this email and consider changing your password.
+            </p>
+
+            <p>Regards,<br/>QoFund Team</p>
+        </body>
+        </html>
+        """;
+
+            message.Body = new BodyBuilder
+            {
+                HtmlBody = body,
+                TextBody =
+                    $"Hello {firstName}, your QoFund login verification " +
+                    $"code is {otp}. It expires in 5 minutes. " +
+                    "Do not share this code with anyone."
+            }.ToMessageBody();
+
+            using var smtp = new SmtpClient();
+
+            using var smtpTimeout =
+                new CancellationTokenSource(
+                    TimeSpan.FromSeconds(30));
+
+            using var linkedCts =
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken,
+                    smtpTimeout.Token);
+
+            try
+            {
+                ///for port 587
+                //await smtp.ConnectAsync(
+                //    _settings.SmtpHost,
+                //    _settings.SmtpPort,
+                //    SecureSocketOptions.StartTls,
+                //    linkedCts.Token);
+
+                ///for port 465
+                await smtp.ConnectAsync(
+                    _settings.SmtpHost,
+                    _settings.SmtpPort,
+                    SecureSocketOptions.SslOnConnect,
+                    cancellationToken);
+
+                await smtp.AuthenticateAsync(
+                    _settings.Username,
+                    _settings.Password,
+                    linkedCts.Token);
+
+                await smtp.SendAsync(
+                    message,
+                    linkedCts.Token);
+            }
+            finally
+            {
+                if (smtp.IsConnected)
+                {
+                    await smtp.DisconnectAsync(
+                        true,
+                        CancellationToken.None);
+                }
+            }
+        }
+
+
     }
 }

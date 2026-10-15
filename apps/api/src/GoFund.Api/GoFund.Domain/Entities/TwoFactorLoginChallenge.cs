@@ -19,5 +19,9 @@ namespace GoFund.Domain.Entities
         public bool IsUsed { get; set; }
 
         public DateTime? UsedAtUtc { get; set; }
+
+        public string? OtpHash { get; set; }
+        public DateTime? OtpExpiresAtUtc { get; set; }
+        public DateTime? LastOtpSentAtUtc { get; set; }
     }
 }

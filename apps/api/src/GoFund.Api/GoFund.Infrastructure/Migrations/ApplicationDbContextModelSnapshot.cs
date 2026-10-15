@@ -77,6 +77,15 @@ namespace GoFund.Infrastructure.Migrations
                     b.Property<bool>("IsUsed")
                         .HasColumnType("bit");
 
+                    b.Property<DateTime?>("LastOtpSentAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("OtpExpiresAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("OtpHash")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<DateTime?>("UsedAtUtc")
                         .HasColumnType("datetime2");
 

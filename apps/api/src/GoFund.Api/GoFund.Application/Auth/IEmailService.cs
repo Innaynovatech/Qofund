@@ -13,6 +13,12 @@ namespace GoFund.Application.Auth
         string resetLink,
         CancellationToken cancellationToken = default);
 
+        Task SendLoginOtpAsync(string email, string firstName, string otp, CancellationToken cancellationToken = default);
+
+
+
+
+
 
 
     }

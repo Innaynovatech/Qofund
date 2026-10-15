@@ -14,6 +14,7 @@ using System;
 using System.Collections.Generic;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 
 
@@ -435,72 +436,54 @@ namespace GoFund.Infrastructure.Identity
         //    };
         //}
 
-        public async Task<LoginResponse> LoginAsync(
-    LoginRequest request,
-    CancellationToken cancellationToken = default)
+
+        public async Task<LoginResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
         {
-            var user =
-                await _userManager.FindByEmailAsync(
-                    request.Email);
+            var user = await _userManager.FindByEmailAsync(request.Email);
 
             if (user == null)
             {
-                throw new UnauthorizedAccessException(
-                    "Invalid email or password.");
+                throw new UnauthorizedAccessException("Invalid email or password.");
+
             }
 
             if (!user.IsActive)
             {
-                throw new UnauthorizedAccessException(
-                    "User account is inactive.");
+                throw new UnauthorizedAccessException("User account is inactive.");
+
             }
 
-            var passwordValid =
-                await _userManager.CheckPasswordAsync(
-                    user,
-                    request.Password);
+            var passwordValid = await _userManager.CheckPasswordAsync(user, request.Password);
 
             if (!passwordValid)
             {
-                throw new UnauthorizedAccessException(
-                    "Invalid email or password.");
+                throw new UnauthorizedAccessException("Invalid email or password.");
+
             }
 
-            // -----------------------------------------------------
-            // 2FA
-            // -----------------------------------------------------
-
+            // Two-factor authentication using email OTP
             if (user.TwoFactorEnabled)
             {
-                var challenge =
-                    await CreateTwoFactorLoginChallengeAsync(
-                        user.Id,
-                        cancellationToken);
+                var challenge = await CreateTwoFactorLoginChallengeAsync(user.Id, cancellationToken);
+
+                await SendEmailOtpAsync(user, challenge, cancellationToken);
 
                 return new LoginResponse
                 {
                     RequiresTwoFactor = true,
                     UserId = user.Id,
-                    ChallengeId =
-                        challenge.Id.ToString(),
-                    ChallengeExpiresAt =
-                        challenge.ExpiresAtUtc,
+                    ChallengeId = challenge.Id.ToString(),
+                    ChallengeExpiresAt = challenge.OtpExpiresAtUtc,
                     Auth = null
                 };
             }
 
-            // -----------------------------------------------------
             // Normal login
-            // -----------------------------------------------------
-
             user.LastLoginAt = DateTime.UtcNow;
 
             await _userManager.UpdateAsync(user);
 
-            var authResponse =
-                await GenerateAuthResponseAsync(
-                    user,
-                    cancellationToken);
+            var authResponse = await GenerateAuthResponseAsync(user, cancellationToken);
 
             return new LoginResponse
             {
@@ -510,20 +493,12 @@ namespace GoFund.Infrastructure.Identity
             };
         }
 
+
         public async Task LogoutAsync(LogoutRequest request, CancellationToken cancellationToken = default)
         {
+            var tokenHash = _tokenService.HashRefreshToken(request.RefreshToken);
 
-
-            var tokenHash =
-                _tokenService.HashRefreshToken(
-                    request.RefreshToken);
-
-            var storedToken =
-                await _dbContext.RefreshTokens
-                    .FirstOrDefaultAsync(
-                        x => x.TokenHash == tokenHash,
-                        cancellationToken);
-
+            var storedToken = await _dbContext.RefreshTokens.FirstOrDefaultAsync(x => x.TokenHash == tokenHash, cancellationToken);
             if (storedToken == null)
             {
                 // Don't reveal whether the token exists.
@@ -535,17 +510,14 @@ namespace GoFund.Infrastructure.Identity
             {
                 storedToken.RevokedAt = DateTime.UtcNow;
 
-                await _dbContext.SaveChangesAsync(
-                    cancellationToken);
+                await _dbContext.SaveChangesAsync(cancellationToken);
+
             }
         }
 
-        public async Task<AuthResponse> MicrosoftLoginAsync(
-    ExternalLoginRequest request,
-    CancellationToken cancellationToken = default)
+        public async Task<AuthResponse> MicrosoftLoginAsync(ExternalLoginRequest request, CancellationToken cancellationToken = default)
         {
-            if (string.IsNullOrWhiteSpace(
-                    _microsoftSettings.ClientId))
+            if (string.IsNullOrWhiteSpace(_microsoftSettings.ClientId))
             {
                 throw new InvalidOperationException(
                     "Microsoft authentication is not configured.");
@@ -1249,135 +1221,167 @@ namespace GoFund.Infrastructure.Identity
                 "&period=30";
         }
 
-        public async Task<AuthResponse> LoginTwoFactorAsync(
-     VerifyTwoFactorLoginRequest request,
-     CancellationToken cancellationToken = default)
+        
+public async Task<AuthResponse> LoginTwoFactorAsync(VerifyTwoFactorLoginRequest request, CancellationToken cancellationToken = default)
+{
+    if (!Guid.TryParse(request.ChallengeId, out var challengeId))
+    {
+        throw new UnauthorizedAccessException(
+            "Invalid 2FA challenge.");
+    }
+
+    if (string.IsNullOrWhiteSpace(request.Code))
+    {
+        throw new UnauthorizedAccessException(
+            "Email verification code is required.");
+    }
+
+    var challenge = await _dbContext.TwoFactorLoginChallenges
+        .FirstOrDefaultAsync(
+            x => x.Id == challengeId,
+            cancellationToken);
+
+    if (challenge == null)
+    {
+        throw new UnauthorizedAccessException(
+            "Invalid 2FA challenge.");
+    }
+
+    var now = DateTime.UtcNow;
+
+    if (challenge.IsUsed)
+    {
+        throw new UnauthorizedAccessException(
+            "This 2FA challenge has already been used.");
+    }
+
+    // Enforce the login challenge's overall expiry.
+    if (challenge.ExpiresAtUtc <= now)
+    {
+        challenge.IsUsed = true;
+        challenge.UsedAtUtc = now;
+        challenge.OtpHash = null;
+        challenge.OtpExpiresAtUtc = null;
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        throw new UnauthorizedAccessException(
+            "2FA challenge has expired. Please log in again.");
+    }
+
+    // Enforce the maximum number of attempts.
+    if (challenge.FailedAttempts >=
+        _twoFactorSettings.MaximumAttempts)
+    {
+        challenge.IsUsed = true;
+        challenge.UsedAtUtc = now;
+        challenge.OtpHash = null;
+        challenge.OtpExpiresAtUtc = null;
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        throw new UnauthorizedAccessException(
+            "Maximum 2FA attempts exceeded. Please log in again.");
+    }
+
+    var user = await _userManager.FindByIdAsync(
+        challenge.UserId.ToString());
+
+    if (user == null)
+    {
+        throw new UnauthorizedAccessException(
+            "Invalid 2FA challenge.");
+    }
+
+    if (!user.IsActive)
+    {
+        throw new UnauthorizedAccessException(
+            "User account is inactive.");
+    }
+
+    if (!user.TwoFactorEnabled)
+    {
+        throw new InvalidOperationException(
+            "Two-factor authentication is not enabled.");
+    }
+
+    // Validate the six-digit email OTP.
+    var submittedOtp = request.Code.Trim();
+
+    var validFormat =
+        submittedOtp.Length == 6 &&
+        submittedOtp.All(char.IsDigit);
+
+    var valid = false;
+
+    if (validFormat &&
+        !string.IsNullOrWhiteSpace(challenge.OtpHash) &&
+        challenge.OtpExpiresAtUtc.HasValue &&
+        challenge.OtpExpiresAtUtc.Value > now)
+    {
+        try
         {
-            if (!Guid.TryParse(
-                    request.ChallengeId,
-                    out var challengeId))
-            {
-                throw new UnauthorizedAccessException(
-                    "Invalid 2FA challenge.");
-            }
+            var expectedHash = Convert.FromHexString(
+                challenge.OtpHash);
 
-            if (string.IsNullOrWhiteSpace(request.Code))
-            {
-                throw new UnauthorizedAccessException(
-                    "Authenticator code is required.");
-            }
+            var submittedHash = Convert.FromHexString(
+                HashEmailOtp(submittedOtp));
 
-            var challenge =
-                await _dbContext.TwoFactorLoginChallenges
-                    .FirstOrDefaultAsync(
-                        x => x.Id == challengeId,
-                        cancellationToken);
+            valid =
+                expectedHash.Length == submittedHash.Length &&
+                CryptographicOperations.FixedTimeEquals(
+                    expectedHash,
+                    submittedHash);
+        }
+        catch (FormatException)
+        {
+            // A malformed stored hash must never validate.
+            valid = false;
+        }
+    }
 
-            if (challenge == null)
-            {
-                throw new UnauthorizedAccessException(
-                    "Invalid 2FA challenge.");
-            }
+    if (!valid)
+    {
+        challenge.FailedAttempts++;
 
-            var now = DateTime.UtcNow;
-
-            if (challenge.IsUsed)
-            {
-                throw new UnauthorizedAccessException(
-                    "This 2FA challenge has already been used.");
-            }
-
-            if (challenge.ExpiresAtUtc <= now)
-            {
-                challenge.IsUsed = true;
-                challenge.UsedAtUtc = now;
-
-                await _dbContext.SaveChangesAsync(
-                    cancellationToken);
-
-                throw new UnauthorizedAccessException(
-                    "2FA challenge has expired.");
-            }
-
-            if (challenge.FailedAttempts >=
-                _twoFactorSettings.MaximumAttempts)
-            {
-                challenge.IsUsed = true;
-                challenge.UsedAtUtc = now;
-
-                await _dbContext.SaveChangesAsync(
-                    cancellationToken);
-
-                throw new UnauthorizedAccessException(
-                    "Maximum 2FA attempts exceeded.");
-            }
-
-            var user =
-                await _userManager.FindByIdAsync(
-                    challenge.UserId.ToString());
-
-            if (user == null)
-            {
-                throw new UnauthorizedAccessException(
-                    "Invalid 2FA challenge.");
-            }
-
-            if (!user.IsActive)
-            {
-                throw new UnauthorizedAccessException(
-                    "User account is inactive.");
-            }
-
-            if (!user.TwoFactorEnabled)
-            {
-                throw new InvalidOperationException(
-                    "Two-factor authentication is not enabled.");
-            }
-
-            var valid =
-                await _userManager.VerifyTwoFactorTokenAsync(
-                    user,
-                    _userManager.Options
-                        .Tokens
-                        .AuthenticatorTokenProvider,
-                    request.Code);
-
-            if (!valid)
-            {
-                challenge.FailedAttempts++;
-
-                if (challenge.FailedAttempts >=
-                    _twoFactorSettings.MaximumAttempts)
-                {
-                    challenge.IsUsed = true;
-                    challenge.UsedAtUtc = now;
-                }
-
-                await _dbContext.SaveChangesAsync(
-                    cancellationToken);
-
-                throw new UnauthorizedAccessException(
-                    "Invalid authenticator code.");
-            }
-
-            // -----------------------------------------------------
-            // Successful 2FA
-            // -----------------------------------------------------
-
+        if (challenge.FailedAttempts >=
+            _twoFactorSettings.MaximumAttempts)
+        {
             challenge.IsUsed = true;
             challenge.UsedAtUtc = now;
-
-            user.LastLoginAt = now;
-
-            await _dbContext.SaveChangesAsync(
-                cancellationToken);
-
-            await _userManager.UpdateAsync(user);
-
-            return await GenerateAuthResponseAsync(
-                user,
-                cancellationToken);
+            challenge.OtpHash = null;
+            challenge.OtpExpiresAtUtc = null;
         }
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        throw new UnauthorizedAccessException(
+            "Invalid or expired email verification code.");
+    }
+
+    // Successful email OTP verification.
+    challenge.IsUsed = true;
+    challenge.UsedAtUtc = now;
+    challenge.OtpHash = null;
+    challenge.OtpExpiresAtUtc = null;
+
+    user.LastLoginAt = now;
+
+    await _dbContext.SaveChangesAsync(cancellationToken);
+
+    var updateResult = await _userManager.UpdateAsync(user);
+
+    if (!updateResult.Succeeded)
+    {
+        throw new InvalidOperationException(
+            "Unable to update the user's login information.");
+    }
+
+    return await GenerateAuthResponseAsync(
+        user,
+        cancellationToken);
+}
+
 
         private async Task<TwoFactorLoginChallenge>
     CreateTwoFactorLoginChallengeAsync(
@@ -1604,10 +1608,10 @@ namespace GoFund.Infrastructure.Identity
         }
 
         public async Task<TwoFactorStatusResponse>
-    GetTwoFactorStatusAsync(
-        Guid userId,
-        CancellationToken cancellationToken = default)
+        GetTwoFactorStatusAsync(Guid userId, CancellationToken cancellationToken = default)
         {
+
+
             var user =
                 await _userManager.FindByIdAsync(
                     userId.ToString());
@@ -1631,5 +1635,60 @@ namespace GoFund.Infrastructure.Identity
                 IsEmailConfirmed = user.EmailConfirmed
             };
         }
+
+
+        private static string GenerateEmailOtp()
+        {
+            return RandomNumberGenerator
+                .GetInt32(0, 1_000_000)
+                .ToString("D6");
+        }
+
+        private static string HashEmailOtp(string otp)
+        {
+            var bytes = SHA256.HashData(
+                Encoding.UTF8.GetBytes(otp));
+
+            return Convert.ToHexString(bytes);
+        }
+
+        private async Task SendEmailOtpAsync(ApplicationUser user, TwoFactorLoginChallenge challenge, CancellationToken cancellationToken)
+        {
+            var now = DateTime.UtcNow;
+            var otp = GenerateEmailOtp();
+
+            challenge.OtpHash = HashEmailOtp(otp);
+            challenge.OtpExpiresAtUtc = now.AddMinutes(5);
+            challenge.LastOtpSentAtUtc = now;
+            challenge.FailedAttempts = 0;
+
+            await _dbContext.SaveChangesAsync(cancellationToken);
+
+            try
+            {
+                await _emailService.SendLoginOtpAsync(
+                    user.Email!,
+                    user.FirstName,
+                    otp,
+                    cancellationToken);
+            }
+            catch
+            {
+                // Prevent use of an OTP whose delivery failed.
+                challenge.IsUsed = true;
+                challenge.UsedAtUtc = DateTime.UtcNow;
+                challenge.OtpHash = null;
+                challenge.OtpExpiresAtUtc = null;
+
+                await _dbContext.SaveChangesAsync(
+                    CancellationToken.None);
+
+                throw;
+            }
+        }
+
     }
+
+
+
 }

@@ -1,6 +1,5 @@
 import './App.css'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
-import Login from './Pages/Authentication/Login'
 import RouteList from './Pages/RouteList'
 import AuthPage from './Pages/Authentication/AuthPage'
 

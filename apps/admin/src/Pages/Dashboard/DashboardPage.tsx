@@ -1,13 +1,13 @@
-import { FileText, CheckCircle2, AlertTriangle, XCircle } from "lucide-react";
+//import { FileText, CheckCircle2, AlertTriangle, XCircle } from "lucide-react";
 
-import { ActivityFeed, type ActivityItem } from "./ActivityFeed";
+import { ActivityFeed } from "./ActivityFeed";
 import { type ColumnDef, CustomTable } from "@/components/global/CustomTable";
 import { DashboardCard } from "@/components/global/DashboardCard";
-import { useFilterToggle, FilterButton, FilterPanel } from "@/components/global/FilterToggle";
+// import { useFilterToggle, FilterButton, FilterPanel } from "@/components/global/FilterToggle";
 import { PageHeader } from "@/components/global/PageHeader";
 import { StatusBadge } from "@/components/global/StatusBadge";
-import { type SummaryCardData, SummaryCardsGrid } from "@/components/global/SummaryCard";
-import { type DisbursementPoint, LoanDisbursementChart } from "../../components/charts/LoanDisbursementChart";
+import {  SummaryCardsGrid } from "@/components/global/SummaryCard";
+import {  LoanDisbursementChart } from "../../components/charts/LoanDisbursementChart";
 import { type LoanRequest, STATUS_TONE, SUMMARY_CARDS, DISBURSEMENT_TREND, LOAN_REQUESTS, RECENT_ACTIVITY } from "@/components/dummy/dashboardData";
 
 // --- Mock data — replace with real API calls ---
@@ -42,7 +42,7 @@ const loanRequestColumns: ColumnDef<LoanRequest>[] = [
 // --- Page ---
 
 export default function DashboardPage() {
-  const filter = useFilterToggle();
+  //const filter = useFilterToggle();
 
   const today = new Date().toLocaleDateString("en-US", {
     weekday: "long",
@@ -55,10 +55,10 @@ export default function DashboardPage() {
       <PageHeader
         title="Dashboard"
         description={`Live snapshot of your loan portfolio — ${today}`}
-        actions={<FilterButton {...filter} />}
+        // actions={<FilterButton {...filter} />}
       />
 
-      {filter.open && (
+      {/* {filter.open && (
         <FilterPanel>
           <input
             type="search"
@@ -77,7 +77,7 @@ export default function DashboardPage() {
             <option>This year</option>
           </select>
         </FilterPanel>
-      )}
+      )} */}
 
       <SummaryCardsGrid cards={SUMMARY_CARDS} />
 
